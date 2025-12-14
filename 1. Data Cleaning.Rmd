@@ -1,0 +1,577 @@
+---
+title: "Data Cleaning"
+author: "Ong Hui Ling"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data-Driven Financial Risk Analysis: Fraud Detection and Credit Limit Prediction Using Machine Learning
+Dataset: https://www.kaggle.com/datasets/computingvictor/transactions-fraud-datasets
+
+Problems: 
+
+1. Classfication: Fraud Detection 
+2. Regression: Credit Limit Prediction 
+
+
+Objectives:
+
+1. To develop a machine learning model to classify credit card transactions as fraudulent or legitimate using transaction, card, and user features.
+2. To build a regression model to predict appropriate credit limits for cardholders based on financial behavior, demographics, and transaction patterns.
+
+# Import Package
+```{r}
+library(data.table)   
+library(jsonlite)     
+library(dplyr)        
+library(lubridate)
+library(stringr)
+```
+
+# 1. LOAD DATA
+```{r}
+# Load CSV files with fread (much faster than read.csv)
+user_df <- fread('Financial/users_data.csv')
+
+card_df <- fread('Financial/cards_data.csv')
+
+transaction_df <- fread('Financial/transactions_data.csv')
+
+train_fraud_label_df <- fread('Financial/train_fraud_labels.csv')
+
+mcc_json <- fromJSON('Financial/mcc_codes.json')
+mcc_codes_df <- data.table(
+  mcc_code = names(mcc_json),
+  description = as.character(mcc_json)
+)
+```
+
+
+# 2. DATASET OVERVIEW
+### 2.1 Display number or rows and columns
+```{r}
+cat("User data:        ", format(nrow(user_df), big.mark=","), "rows,", ncol(user_df), "columns")
+cat("Card data:        ", format(nrow(card_df), big.mark=","), "rows,", ncol(card_df), "columns")
+cat("Transaction data: ", format(nrow(transaction_df), big.mark=","), "rows,", ncol(transaction_df), "columns")
+cat("Fraud labels:     ", format(nrow(train_fraud_label_df), big.mark=","), "rows,", ncol(train_fraud_label_df), "columns")
+cat("MCC codes:        ", format(nrow(mcc_codes_df), big.mark=","), "rows,", ncol(mcc_codes_df), "columns")
+```
+
+### 2.2 Display column names
+```{r}
+cat("User columns:", paste(names(user_df), collapse=", "))
+cat("Card columns:", paste(names(card_df), collapse=", "))
+cat("Transaction columns:", paste(names(transaction_df), collapse=", "))
+cat("Fraud label columns:", paste(names(train_fraud_label_df), collapse=", "))
+cat("MCC code columns:", paste(names(mcc_codes_df), collapse=", "))
+
+```
+
+# 3. DATA QUALITY CHECK
+### 3.1 Check for duplicates
+```{r}
+cat("User duplicates (by id):", sum(duplicated(user_df$id)))
+cat("Card duplicates (by id):", sum(duplicated(card_df$id)))
+cat("Transaction duplicates (by id):", sum(duplicated(transaction_df$id)))
+cat("Fraud label duplicates (by id):", sum(duplicated(train_fraud_label_df$id)))
+```
+
+### 3.3 Check for missing values
+```{r}
+
+user_missing <- colSums(is.na(user_df))
+if(sum(user_missing) == 0) {
+  print("No missing value in User Data")
+} else {
+  print(user_missing[user_missing > 0])
+  cat("Missing %:", round(user_missing[user_missing > 0] / nrow(user_df) * 100, 2))
+}
+
+card_missing <- colSums(is.na(card_df))
+if(sum(card_missing) == 0) {
+  print("No missing value in Card Data")
+} else {
+  print(card_missing[card_missing > 0])
+  cat("Missing %:", round(card_missing[card_missing > 0] / nrow(card_df) * 100, 2))
+}
+
+trans_missing <- colSums(is.na(transaction_df))
+if(sum(trans_missing) == 0) {
+  print("No missing value in Transaction Data")
+} else {
+  print(trans_missing[trans_missing > 0])
+  cat("Missing % (in sample):", round(trans_missing[trans_missing > 0] / nrow(transaction_df) * 100, 2))
+}
+
+fraud_missing <- colSums(is.na(train_fraud_label_df))
+if(sum(fraud_missing) == 0) {
+  print("No missing value in Fraud Data")
+} else {
+  print(fraud_missing[fraud_missing > 0])
+  cat("Missing % (in sample):", round(fraud_missing[fraud_missing > 0] / nrow(train_fraud_label_df) * 100, 2))
+}
+
+```
+
+Explanation: For the missing values in zip column in transaction data, we will 
+
+- keep the missing values, and fill it with 00000, and
+
+- create one more feature "zip_missing".
+
+This is because it might be useful for fraud detection (missing transaction locations details, higher chances to be fraud transaction)
+
+
+
+# 4. DATA CLEANING
+### 4.1 Handle missing ZIP codes
+```{r}
+if("zip" %in% names(transaction_df)) {
+  # Create a flag for missing ZIP (useful feature)
+  transaction_df[, zip_missing := ifelse(is.na(zip), 1, 0)]
+  
+  # Fill with placeholder for missing 
+  transaction_df[is.na(zip), zip := "00000"]
+  
+  cat("Missing ZIP codes handled (", sum(transaction_df$zip_missing), "flagged )")
+}
+```
+
+
+### 4.2 Remove duplicates for all tables
+```{r}
+user_df <- unique(user_df, by = "id")
+card_df <- unique(card_df, by = "id")
+transaction_df <- unique(transaction_df, by = "id")
+train_fraud_label_df <- unique(train_fraud_label_df, by = "transaction_id")
+```
+
+
+### 4.3 Set keys for faster joins
+```{r}
+setkey(user_df, id)
+setkey(card_df, id, client_id)
+setkey(transaction_df, id, client_id, card_id)
+setkey(train_fraud_label_df, transaction_id)
+```
+
+### 4.4 Convert date columns
+4.4.1. Transaction date
+```{r}
+if("date" %in% names(transaction_df)) {
+  transaction_df[, date := as.Date(date)]
+  print("Transaction dates converted.")
+}
+```
+
+4.4.2. acct_open_date
+```{r}
+if("acct_open_date" %in% names(card_df)) {
+  # Handle MM/YYYY format - convert to first day of the month
+  card_df[, acct_open_date := as.Date(paste0("01/", acct_open_date), format = "%d/%m/%Y")]
+  print("Account open dates converted")
+}
+```
+
+4.4.3. expire
+```{r}
+if("expires" %in% names(card_df)) {
+  # Handle MM/YYYY format - convert to first day of the month
+  card_df[, expires := as.Date(paste0("01/", expires), format = "%d/%m/%Y")]
+  print("Expired dates converted")
+}
+```
+
+
+### 4.5 Handle Target column
+### 4.5.1. credit_limit (regression target) 
+1. remove dollar sign
+2. Convert to numeric
+3. remove invalid values (negative or zero credit limits)
+```{r}
+cat("Number of rows before removing invalid values:", nrow(card_df))
+if("credit_limit" %in% names(card_df)) {
+  # Remove dollar sign and convert to numeric
+  card_df[, credit_limit := as.numeric(gsub("[$,]", "", credit_limit))]
+  # Remove negative or zero credit limits
+  card_df <- card_df[is.na(credit_limit) | credit_limit > 0]
+}
+cat("Number of rows after removing invalid values (negative or zero credit limits):", nrow(card_df))
+```
+
+
+### 4.5.2. fraud target (binary: YES/NO)
+```{r}
+if("target" %in% names(train_fraud_label_df)) {
+  # Convert to binary factor
+  train_fraud_label_df[, target := factor(target, levels = c("No", "Yes"))]
+}
+head(train_fraud_label_df)
+
+```
+
+
+### 4.6 Transaction table: feature columns data cleaning
+4.6.1. Clean merchant city and state - remove leading/trailing spaces
+```{r}
+if("merchant_city" %in% names(transaction_df)) {
+  transaction_df[, merchant_city := trimws(merchant_city)]
+}
+if("merchant_state" %in% names(transaction_df)) {
+  transaction_df[, merchant_state := trimws(merchant_state)]
+}
+```
+
+4.6.2. Handle amount column - remove dollar sign, convert to numeric
+```{r}
+if("amount" %in% names(transaction_df)) {
+  # Remove dollar sign and convert to numeric
+  transaction_df[, amount := as.numeric(gsub("[$,]", "", amount))]
+}
+```
+
+4.6.3. Feature Engineering - Create is_refund column to flag negative transaction
+```{r}
+if("amount" %in% names(transaction_df)) {
+  # Create flag for negative amounts (refunds/returns)
+  transaction_df[, is_refund := ifelse(amount < 0, 1, 0)]
+  cat("Negative amounts (refunds):", sum(transaction_df$amount < 0, na.rm=TRUE))
+}
+```
+
+4.6.4. Feature Engineering - Create binary flags for each error type
+
+1. Create binary flags for each error type (useful for fraud detection)
+<ol>
+a. has_error
+b. error_bad_expiration
+c. error_bad_card_number
+d. error_insufficient_balance
+f. error_bad_pin
+g. error_bad_cvv
+h. error_bad_zipcode
+i. error_technical_glitch
+</ol>
+
+2. Count number of errors per transaction and create error count columns
+```{r}
+if("errors" %in% names(transaction_df)) {
+
+  # Replace empty strings or whitespace with NA
+  transaction_df[errors == "" | trimws(errors) == "", errors := NA]
+  
+  # Create binary flags for each error type 
+  transaction_df[, has_error := ifelse(is.na(errors), 0, 1)]
+  transaction_df[, error_bad_expiration := ifelse(grepl("Bad Expiration", errors, ignore.case = TRUE), 1, 0)]
+  transaction_df[, error_bad_card_number := ifelse(grepl("Bad Card Number", errors, ignore.case = TRUE), 1, 0)]
+  transaction_df[, error_insufficient_balance := ifelse(grepl("Insufficient Balance", errors, ignore.case = TRUE), 1, 0)]
+  transaction_df[, error_bad_pin := ifelse(grepl("Bad PIN", errors, ignore.case = TRUE), 1, 0)]
+  transaction_df[, error_bad_cvv := ifelse(grepl("Bad CVV", errors, ignore.case = TRUE), 1, 0)]
+  transaction_df[, error_bad_zipcode := ifelse(grepl("Bad Zipcode", errors, ignore.case = TRUE), 1, 0)]
+  transaction_df[, error_technical_glitch := ifelse(grepl("Technical Glitch", errors, ignore.case = TRUE), 1, 0)]
+  
+  # Count number of errors per transaction
+  transaction_df[, error_count := has_error]
+  transaction_df[!is.na(errors), error_count := str_count(errors, ",") + 1]
+  
+  # Print error distribution
+  cat("Transactions with errors:", sum(transaction_df$has_error), 
+      "(", round(sum(transaction_df$has_error)/nrow(transaction_df)*100, 2), "%)\n")
+  
+  # Drop errors column
+  transaction_df[, errors := NULL]
+}
+```
+
+
+### 4.7 Card data: feature columns data cleaning
+4.7.1. Convert card_on_dark_web and has_chip binary columns (Yes/No) to numeric (0/1)
+```{r}
+if("card_on_dark_web" %in% names(card_df)) {
+  card_df[, card_on_dark_web := ifelse(toupper(card_on_dark_web) == "Yes", 1, 0)]
+  table(card_df$card_on_dark_web)
+}
+
+if("has_chip" %in% names(card_df)) {
+  card_df[, has_chip := ifelse(toupper(has_chip) == "YES", 1, 0)]
+  table(card_df$has_chip)
+}
+
+
+```
+
+Observation: Card on dark web column only consists of single value (No), we will drop this column as it contains zero predictive power.
+
+```{r}
+card_df[, card_on_dark_web := NULL]
+names(card_df)
+```
+
+
+### User data: feature columns data cleaning
+4.7.1. Clean financial columns - remove dollar signs and convert to numeric
+```{r}
+if("per_capita_income" %in% names(user_df)) {
+  user_df[, per_capita_income := as.numeric(gsub("[$,]", "", per_capita_income))]
+  print("per_capita_income converted to numeric.")
+}
+
+if("yearly_income" %in% names(user_df)) {
+  user_df[, yearly_income := as.numeric(gsub("[$,]", "", yearly_income))]
+  print("yearly_income converted to numeric.")
+}
+
+if("total_debt" %in% names(user_df)) {
+  user_df[, total_debt := as.numeric(gsub("[$,]", "", total_debt))]
+  print("total_debt converted to numeric.")
+}
+```
+
+4.7.2. Feature Engineering - Create new features debt_to_income_ratio for credit limit prediction
+```{r}
+if("yearly_income" %in% names(user_df) & "total_debt" %in% names(user_df)) {
+  # Debt-to-Income ratio (important for credit decisions)
+  user_df[, debt_to_income_ratio := ifelse(yearly_income > 0, 
+                                           total_debt / yearly_income, 
+                                           NA)]
+  print("debt_to_income_ratio feature created.")
+}
+```
+
+
+### 4.8 mcc data: feature columns data cleaning
+4.8.1. convert mcc_code to integer, as mcc_code in transaction df is integer
+```{r}
+if("mcc" %in% names(transaction_df) & "mcc_code" %in% names(mcc_codes_df)) {
+  # Convert mcc_code to integer to match transaction MCC
+  mcc_codes_df[, mcc_code := as.integer(mcc_code)]
+  cat("MCC codes formatted as integer for matching.\n")
+}
+```
+
+### 4.9 Final data type validation
+```{r}
+head(transaction_df)
+head(user_df)
+head(card_df)
+head(mcc_codes_df)
+head(train_fraud_label_df)
+```
+
+
+# 5. CLEANED DATA SUMMARY
+### 5.1 Display number of rows and columns after basic cleaning
+```{r}
+cat("User data:        ", format(nrow(user_df), big.mark=","), "rows\n")
+cat("Card data:        ", format(nrow(card_df), big.mark=","), "rows\n")
+cat("Transaction data: ", format(nrow(transaction_df), big.mark=","), "rows\n")
+cat("Fraud labels:     ", format(nrow(train_fraud_label_df), big.mark=","), "rows\n")
+```
+
+
+### 5.2 Basic statistics
+```{r}
+if("credit_limit" %in% names(card_df)) {
+  print(summary(card_df$credit_limit))
+}
+```
+
+
+```{r}
+if("target" %in% names(train_fraud_label_df)) {
+  print(table(train_fraud_label_df$target))
+  cat("Fraud Rate:", round(sum(train_fraud_label_df$target == "YES") / nrow(train_fraud_label_df) * 100, 2))
+}
+```
+
+
+# 6. PREPARED FRAUD DETECTION DATASET (ALL DATA MERGED)
+### 6.1 Merge transactions with fraud labels
+```{r}
+fraud_data <- merge(transaction_df, train_fraud_label_df, 
+                    by.x = "id", by.y = "transaction_id", 
+                    all.x = TRUE)
+cat("After merge fraud and transaction data:", nrow(fraud_data), "rows")
+```
+
+### 6.2 Remove transactions without fraud labels (keep only labelled data)
+```{r}
+fraud_data <- fraud_data[!is.na(target)]
+cat("  After removing unlabeled data:", format(nrow(fraud_data), big.mark=","))
+```
+
+### 6.3 Add MCC descriptions
+```{r}
+fraud_data <- merge(fraud_data, mcc_codes_df, 
+                    by.x = "mcc", by.y = "mcc_code", 
+                    all.x = TRUE)
+```
+
+### 6.4 Add card information
+```{r}
+fraud_data <- merge(fraud_data, card_df, 
+                    by.x = "card_id", by.y = "id", 
+                    all.x = TRUE, 
+                    suffixes = c("", "_card"))
+```
+
+### 6.5 Add user information
+```{r}
+fraud_data <- merge(fraud_data, user_df, 
+                    by.x = "client_id", by.y = "id", 
+                    all.x = TRUE, 
+                    suffixes = c("", "_user"))
+```
+
+### 6.6 Reorganize columns 
+```{r}
+# Remove client_id_card as it is same as client_id column
+fraud_data[, client_id_card := NULL]
+
+# Define column order: Transaction -> MCC -> Card -> User -> Target
+transaction_cols <- c("id", "date", "client_id", "card_id", "amount", "mcc", 
+                      "use_chip", "merchant_id", "merchant_city", "merchant_state", "zip",
+                      "is_refund", "has_error", "error_bad_expiration", "error_bad_card_number", 
+                      "error_insufficient_balance", "error_bad_pin","error_bad_cvv", 
+                      "error_bad_zipcode", "error_technical_glitch", "error_count")
+
+mcc_cols <- c("description")
+
+card_cols <- c("card_brand", "card_type", "card_number", "expires", "cvv", "has_chip",
+               "num_cards_issued", "credit_limit", "acct_open_date", "year_pin_last_changed")
+
+user_cols <- c("current_age", "retirement_age", "birth_year", "birth_month", "gender",
+               "address", "latitude", "longitude", "per_capita_income", "yearly_income",
+               "total_debt", "credit_score", "num_credit_cards", "debt_to_income_ratio")
+
+target_col <- c("target")
+
+# Combine in desired order, keeping only columns that exist
+all_cols <- c(transaction_cols, mcc_cols, card_cols, user_cols, target_col)
+existing_cols <- all_cols[all_cols %in% names(fraud_data)]
+
+# Reorder columns
+setcolorder(fraud_data, existing_cols)
+```
+
+### 6.7 Final fraud detection dataset
+```{r}
+cat("Total rows:", format(nrow(fraud_data), big.mark=","))
+cat("Total columns:", ncol(fraud_data))
+cat("Columns:", paste(names(fraud_data)[1:10], collapse=", "))
+head(fraud_data)
+```
+
+
+### 6.8 Check fraud distribution
+```{r}
+if("target" %in% names(fraud_data)) {
+  print(table(fraud_data$target, useNA = "ifany"))
+}
+```
+
+### 6.9 Save fraud detection dataset
+```{r}
+# save as RDS (faster to load for next stage)
+saveRDS(fraud_data, "CleanedDataSet/fraud_detection_data.rds")
+```
+
+
+# 7. PREPARED CREDIT LIMIT PREDICTION DATASET 
+
+### 7.1 Merge cards with users
+```{r}
+credit_data <- merge(card_df, user_df, 
+                     by.x = "client_id", by.y = "id", 
+                     all.x = TRUE, 
+                     suffixes = c("_card", "_user"))
+```
+
+
+### 7.2 Add aggregated transaction features per card
+```{r}
+transaction_features <- transaction_df[, .(
+  total_transactions = .N,
+  avg_transaction_amount = mean(amount, na.rm = TRUE),
+  max_transaction_amount = max(amount, na.rm = TRUE),
+  min_transaction_amount = min(amount, na.rm = TRUE),
+  total_spent = sum(amount[amount > 0], na.rm = TRUE),
+  total_refunded = sum(abs(amount[amount < 0]), na.rm = TRUE),
+  num_refunds = sum(is_refund, na.rm = TRUE),
+  transaction_frequency = .N,  
+  avg_errors = mean(has_error, na.rm = TRUE),
+  total_errors = sum(has_error, na.rm = TRUE)
+), by = card_id]
+```
+
+### 7.3 Merge transaction features with credit data
+```{r}
+credit_data <- merge(credit_data, transaction_features, 
+                     by.x = "id", by.y = "card_id", 
+                     all.x = TRUE)
+```
+
+
+### 7.4 Fill NA transaction features with 0 for cards with no transactions
+```{r}
+transaction_feature_cols <- c("total_transactions", "avg_transaction_amount", 
+                              "max_transaction_amount", "min_transaction_amount",
+                              "total_spent", "total_refunded", "num_refunds",
+                              "transaction_frequency", "avg_errors", "total_errors")
+
+for(col in transaction_feature_cols) {
+  if(col %in% names(credit_data)) {
+    credit_data[is.na(get(col)), (col) := 0]
+  }
+}
+```
+
+### 7.5 Reorganize columns
+```{r}
+card_info_cols <- c("id", "client_id", "card_brand", "card_type", "card_number", 
+                    "expires", "cvv", "has_chip", "num_cards_issued", 
+                    "acct_open_date", "year_pin_last_changed")
+
+user_info_cols <- c("current_age", "retirement_age", "birth_year", "birth_month", 
+                    "gender", "address", "latitude", "longitude", 
+                    "per_capita_income", "yearly_income", "total_debt", 
+                    "credit_score", "num_credit_cards", "debt_to_income_ratio")
+
+target_col <- c("credit_limit")
+
+# Combine in order, keeping only existing columns
+all_cols_credit <- c(card_info_cols, user_info_cols, transaction_feature_cols, target_col)
+existing_cols_credit <- all_cols_credit[all_cols_credit %in% names(credit_data)]
+
+setcolorder(credit_data, existing_cols_credit)
+```
+
+### 7.6 Final credit limit dataset
+```{r}
+cat("Total rows:", format(nrow(credit_data), big.mark=","))
+cat("Total columns:", ncol(credit_data))
+cat("Columns:", paste(names(credit_data)[1:10], collapse=", "))
+```
+
+### 7.7 Check target variable
+```{r}
+if("credit_limit" %in% names(credit_data)) {
+  cat("\nCredit Limit Summary:\n")
+  print(summary(credit_data$credit_limit))
+}
+```
+
+### 7.8 Remove rows with missing credit_limit 
+```{r}
+credit_data <- credit_data[!is.na(credit_limit)]
+```
+
+### 7.9 Save credit limit dataset
+```{r}
+saveRDS(credit_data, "CleanedDataSet/credit_limit_data.rds")
+fwrite(credit_data, "CleanedDataSet/credit_limit_data.csv")
+```
