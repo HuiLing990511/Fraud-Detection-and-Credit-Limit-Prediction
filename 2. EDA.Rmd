@@ -1,0 +1,284 @@
+---
+title: "2. EDA"
+author: "Adam"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import Package
+```{r}
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(lubridate)
+library(corrplot)
+library(leaflet)
+library(leaflet.extras)
+```
+
+# 1 Read Clean Dataset
+```{r}
+#full_df <- fread("CleanedDataSet/credit_limit_data.csv")
+head(full_df)
+
+fraud_df <- readRDS("CleanedDataSet/fraud_detection_data.rds")
+head(fraud_df)
+```
+### Distribution of Credit Limit
+Based on the graph below, the credit limit distribution is right-skewed (positively skewed), that suggests majority of the clients have relatively low credit limits, with a few clients having exceptionally high credit limits. The red vertical line likely marks the mean value, where most of the credit limits fall in relation to this value.
+```{r}
+ggplot(full_df, aes(x = credit_limit)) +
+  geom_histogram(
+    bins = 30,
+    aes(fill = after_stat(count)),
+    color = "white"
+  ) +
+  scale_fill_gradient(low = "#AED6F1", high = "#1F618D") +
+  labs(
+    title = "Distribution of Credit Limit",
+    x = "Credit Limit",
+    y = "Count",
+    fill = "Frequency"
+  ) +
+  geom_vline(aes(xintercept = mean(credit_limit, na.rm = TRUE)),
+             color = "#E15759", linewidth = 1.2) +
+  theme_minimal(base_size = 13)
+```
+### Fraud Distribution
+This pie chart represents the distribution of fraud cases in this dataset where Non-Fraud Cases takes up 99.9% of the chart, indicating that the dataset is highly imbalanced, which is typical for fraud detection problems where fraud cases are much fewer than non-fraud cases. This imbalance will require special handling when training machine learning models to ensure the model learns to identify the minority class (fraud) effectively. 
+```{r}
+fraud_df$target <- gsub("yes", "fraud", fraud_df$target)
+fraud_df$target <- gsub("no", "not fraud", fraud_df$target)
+
+pie_chart <- fraud_df %>%
+  group_by(target) %>%
+  summarise(count = n()) %>%
+  plot_ly(labels = ~target, values = ~count, type = 'pie', textinfo = 'label+percent', 
+          title = 'Number of Fraud Cases', 
+          marker = list(colors = c("red", "green"))) %>%
+  layout(margin = list(t = 0, b = 0, l = 0, r = 0))
+
+pie_chart
+```
+
+### Count of Card Brands
+Based on our current data, most of the clients' card brand are Mastercard, followed by Visa Amex and Discover
+```{r}
+ggplot(fraud_df, aes(x = card_brand, fill = target)) +
+  geom_bar(position = "dodge") +  
+  labs(title = "Distribution of Card Brand by Target (Fraud vs Non-Fraud)", 
+       x = "Card Brand", y = "Count") +
+  scale_fill_manual(values = c("Yes" = "red", "No" = "green")) +  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+```
+### Count of Credit Limit and Fraud Cases based on card type
+This graph provides a side-by-side comparison of fraud cases and total credit limit by card type. This comparison suggests that Debit cards are more prone to fraud and hold a larger financial exposure due to higher credit limits.
+
+```{r}
+fraud_data <- fraud_df %>% filter(target == "Yes")
+
+fraud_data$card_type <- factor(fraud_data$card_type, 
+                               levels = names(sort(table(fraud_data$card_type), decreasing = TRUE)))
+
+count_plot <- ggplot(fraud_data, aes(x = card_type, fill = card_type)) +
+  geom_bar() +
+  labs(title = "Distribution of Card Type for Fraud Cases", 
+       x = "Card Type", 
+       y = "Count of Fraud Cases") +
+  scale_fill_manual(values = c("Credit" = "green", "Debit" = "red")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+credit_limit_plot <- ggplot(fraud_data, aes(x = card_type, y = credit_limit, fill = card_type)) +
+  geom_bar(stat = "summary", fun = "sum") +
+  labs(title = "Total Credit Limit by Card Type for Fraud Cases", 
+       x = "Card Type", 
+       y = "Total Credit Limit") +
+  scale_fill_manual(values = c("Credit" = "green", "Debit" = "red")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+count_plotly <- ggplotly(count_plot)
+credit_limit_plotly <- ggplotly(credit_limit_plot)
+
+fig <- subplot(count_plotly, credit_limit_plotly, nrows = 1, shareX = TRUE) %>%
+  layout(
+    title = "Fraud Cases and Credit Limit by Card Type",
+    showlegend = FALSE,  
+    xaxis = list(title = "Card Type"),  
+    yaxis = list(title = "Count of Fraud Cases"),  
+    yaxis2 = list(
+      title = "Total Credit Limit", 
+      overlaying = "y",  
+      side = "right"  
+    )
+  )
+
+fig
+```
+
+### Fraud Cases and Credit Limit by Gender
+This graph presents two visualizations side by side to compare fraud cases and total credit limits by gender. Both Fraud Cases and Total Credit Limit appears to be higher for females than for males suggesting that the overall financial exposure may be greater for females. This could point to gender-based differences in credit access or borrowing behavior.
+
+```{r}
+total_credit_limit_by_gender <- full_df %>%
+  group_by(gender) %>%
+  summarise(total_credit_limit = sum(credit_limit, na.rm = TRUE))
+
+fraud_cases_by_gender <- fraud_df %>%
+  filter(target == "Yes") %>%
+  group_by(gender) %>%
+  summarise(fraud_cases = n())
+
+credit_limit_plot <- ggplot(total_credit_limit_by_gender, aes(x = gender, y = total_credit_limit, fill = gender)) +
+  geom_bar(stat = "identity", color = "black", show.legend = FALSE) +
+  labs(title = "Total Credit Limit by Gender", x = "Gender", y = "Total Credit Limit") +
+  theme_minimal() +
+  scale_fill_manual(values = c("lightblue", "lightpink"))
+
+fraud_cases_plot <- ggplot(fraud_cases_by_gender, aes(x = gender, y = fraud_cases, fill = gender)) +
+  geom_bar(stat = "identity", color = "black", show.legend = FALSE) +
+  labs(title = "Number of Fraud Cases by Gender", x = "Gender", y = "Number of Fraud Cases") +
+  theme_minimal() +
+  scale_fill_manual(values = c("lightblue", "lightpink"))
+
+credit_limit_plotly <- ggplotly(credit_limit_plot)
+fraud_cases_plotly <- ggplotly(fraud_cases_plot)
+
+fig <- subplot(fraud_cases_plotly, credit_limit_plotly, nrows = 1, shareX = TRUE) %>%
+  layout(
+    title = "Fraud Cases and Credit Limit by Gender",
+    showlegend = FALSE,  
+    xaxis = list(title = "Gender"),  
+    yaxis = list(title = "Count of Fraud Cases"),  
+    yaxis2 = list(
+      title = "Total Credit Limit", 
+      overlaying = "y",  
+      side = "right"  
+    )
+  )
+fig
+```
+
+### Fraud Cases and Non-Fraud Cases by Month
+This graph displays the monthly distribution of fraud cases where the highest number of fraud cases occurs in August, where the count reaches more than 1300 cases. Notice that June has the lowest number of fraud cases followed by January and February.
+
+```{r}
+fraud_cases <- fraud_df %>%
+  filter(target == "Yes") %>%
+  group_by(month) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# Ensure the month column is ordered from January to December
+fraud_cases$month <- factor(fraud_cases$month, levels = month.abb)  
+
+# Create the line plot for fraud cases
+ggplot(fraud_cases, aes(x = month, y = count)) +
+  geom_line(size = 1, color = "red") +  # Red line for fraud cases
+  geom_point(size = 2, color = "red") +  # Red points for fraud cases
+  labs(title = "Fraud Cases by Month", 
+       x = "Month", y = "Number of Fraud Cases") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+### Credit Score vs Credit Limit
+This scatter plot shows the relationship between Credit Score and Credit Limit that suggest a visible weak correlation between Credit Score and Credit Limit. As Credit Score increases, the Credit Limit does not show a clear upward trend, and many of the data points are clustered at the lower end of the credit limit scale. A few data points stand out at the higher end of the Credit Limit that could represent cases with unusually high credit limits.
+```{r}
+ggplot(full_df, aes(x = credit_score, y = credit_limit)) +
+  geom_point(color = "blue", alpha = 0.6) +  
+  labs(title = "Credit Score vs Credit Limit", x = "Credit Score", y = "Credit Limit") +
+  theme_minimal() +
+  geom_smooth(method = "lm", se = FALSE, color = "red")  
+```
+### Scatter plot of credit limit against total_spent
+This scatter plot shows the relationship between total spent and credit limit where there is a slight positive correlation indicated by the upward-sloping blue line. As individuals spend more, their credit limits tend to increase, although the relationship is weak and non-linear, especially at higher values.A few outliers at the higher end was spotted. 
+
+```{r}
+ggplot(full_df, aes(total_spent, credit_limit)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm") +
+  theme_minimal()
+```
+
+### Heat Map of Credit Limit Distribution
+This heatmap visualizes the distribution of credit limits across the United States where it concentrates on eastern U.S.and west coast. Meanwhile, areas in the central U.S. and northern regions show a blue tint, suggesting lower concentrations of credit limits in those regions. This heatmap reflects regional economic patterns, showing that credit limits are generally more concentrated in urban and economically active areas, especially along the East and West coasts.
+
+```{r}
+heatmap_data <- full_df %>%
+  select(latitude, longitude, credit_limit) 
+
+map <- leaflet(heatmap_data) %>%
+  # OpenStreetMap tiles
+  addTiles() %>%  
+  addHeatmap(
+    lng = ~longitude, 
+    lat = ~latitude,  
+    intensity = ~credit_limit,  
+    blur = 20, 
+    max = 0.05, 
+    radius = 15 
+  ) %>%
+  setView(lng = mean(fraud_df$longitude), lat = mean(fraud_df$latitude), zoom = 10)  # Center the map
+
+map
+```
+
+### Credit Limit by Card Brand
+This box plot shows the distribution of credit limits by card brand that reveals significant variability in credit limits across different card brands, with Visa and Mastercard showing higher credit limits, and Amex and Discover having more concentrated and lower values.
+
+```{r}
+ggplot(full_df, aes(x=card_brand, y=credit_limit, fill=card_brand)) +
+  geom_boxplot() +
+  labs(title="Credit Limit by Card Brand", x="Card Brand", y="Credit Limit")
+```
+
+### Credit limit by card brand for fraud cases only
+This box plot shows the distribution of credit limits by card brand for fraud cases only with Visa having a more considerable spread and a greater number of outliers at the upper end. The outliers are more prevalent in Visa and Mastercard, which suggests that these card brands tend to have higher variability in the credit limits granted to fraud cases. The box plots indicate that fraud cases associated with Visa and Mastercard generally have higher credit limits, while Amex and Discover are associated with lower credit limits for fraud cases.
+
+
+```{r}
+fraud_cases <- fraud_df %>% filter(target == "Yes")
+
+# Create the boxplot for Credit Limit by Card Brand, showing only fraud cases
+ggplot(fraud_cases, aes(x = card_brand, y = credit_limit, fill = card_brand)) +
+  geom_boxplot() +
+  labs(title = "Credit Limit by Card Brand (Fraud Cases Only)", 
+       x = "Card Brand", 
+       y = "Credit Limit") +
+  scale_fill_manual(values = c("red", "green", "blue", "yellow")) +  # Customize box colors for each card brand
+  theme_minimal()
+```
+
+### Correlation Plot Credit Limit
+This correlation plot visualizes the relationship between different numerical variables in the dataset and how they correlate with the credit limit. The plot reveals that the per_capita_income and yearly_income is the strongest factor influencing credit limit. Higher income typically signals greater financial stability and the ability to repay debt and it is often use as an indicator of repayment capability, so individuals with higher incomes are more likely to be granted higher credit limits as they are perceived as lower risk borrowers.
+```{r}
+cor_data <- full_df %>% select(where(is.numeric))
+cor_data <- cor_data %>% select(-card_number)  
+cor_matrix <- cor(cor_data, use = "complete.obs")
+
+corrplot(cor_matrix, method = "circle", type = "upper", tl.col = "black", tl.srt = 90, tl.cex = 0.7)
+```
+### Correlation plot of target (Fraud Cases)
+This correlation plot visualizes the relationship between various numerical variables in the dataset, with a particular focus on how they relate to fraud cases. This variable appears to be negatively correlated with indicators such as credit limit, credit score, and debt-to-income ratio. This suggests that the outcome represented by target variable could be influenced by a combination of financial and error-related factors, which may reflect behavioral or risk-based characteristics.
+
+```{r}
+fraud_df$new_target <- ifelse(fraud_df$target == "Yes", 1, 0)
+
+# Select numeric columns from the data
+cor_data <- fraud_df %>% select(where(is.numeric))
+
+# Remove the 'card_number' column
+cor_data <- cor_data %>% select(-card_number)  
+
+# Calculate the correlation matrix
+cor_matrix <- cor(cor_data, use = "complete.obs")
+
+# Create the correlation plot with smaller font size for axis labels
+corrplot(cor_matrix, method = "circle", type = "upper", 
+         tl.col = "black", tl.srt = 90, tl.cex = 0.7)
+```
+
