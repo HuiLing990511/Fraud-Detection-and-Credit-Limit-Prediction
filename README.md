@@ -11,11 +11,11 @@ https://www.kaggle.com/datasets/computingvictor/transactions-fraud-datasets
 ## Goal: ##
 We are developing a dual-model machine learning system to enhance decision-making in real-time:
 
-## Fraud Detection (Classification): ##
+#### Fraud Detection (Classification): ####
 - Goal: Instantly flag transactions as "Fraudulent" or "Legitimate."
 - Method: Utilizing transaction metadata, user history, and card features to identify anomalies.
 
-## Credit Limit Optimization (Regression): ##
+#### Credit Limit Optimization (Regression): ####
 - Goal: Predict the optimal credit limit for each user.
 - Method: Analyzing financial behavior and demographics to balance risk with customer purchasing power.
 
