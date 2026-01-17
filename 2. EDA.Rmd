@@ -23,7 +23,7 @@ library(leaflet.extras)
 
 # 1 Read Clean Dataset
 ```{r}
-#full_df <- fread("CleanedDataSet/credit_limit_data.csv")
+full_df <- fread("CleanedDataSet/credit_limit_data.csv")
 head(full_df)
 
 fraud_df <- readRDS("CleanedDataSet/fraud_detection_data.rds")
@@ -167,13 +167,17 @@ fig
 This graph displays the monthly distribution of fraud cases where the highest number of fraud cases occurs in August, where the count reaches more than 1300 cases. Notice that June has the lowest number of fraud cases followed by January and February.
 
 ```{r}
+fraud_df$date <- as.Date(fraud_df$date)  
+fraud_df$month <- month(fraud_df$date)
+fraud_df$month <- month.name[fraud_df$month]
+
 fraud_cases <- fraud_df %>%
   filter(target == "Yes") %>%
   group_by(month) %>%
   summarise(count = n(), .groups = 'drop')
 
 # Ensure the month column is ordered from January to December
-fraud_cases$month <- factor(fraud_cases$month, levels = month.abb)  
+fraud_cases$month <- factor(fraud_cases$month, levels = month.name)
 
 # Create the line plot for fraud cases
 ggplot(fraud_cases, aes(x = month, y = count)) +
