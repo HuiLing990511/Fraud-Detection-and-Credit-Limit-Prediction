@@ -228,12 +228,12 @@ x_test <- x_test %>%
 5 regression models are trained to predict the credit limit  
 - Linear Regression (LM)  
 - Random Forest (RF)  
-- Random Forest (RF)  
+- eXtreme Gradient Boosting (XGBoost)  
 - Gradient Boosting Machine (GBM)  
-- Gradient Boosting Machine (GBM)  
+- Support Vector Regression (SVR)  
 
 Evaluation Metrics  
-- Evaluation Metrics: Measures the standard deviation of prediction errors. Lower is better  
+- R-squared (R2): Measures the standard deviation of prediction errors. Lower is better  
 - RMSE (Root Mean Squared Error): Average absolute difference between predictions and actual values. Lower is better  
 - MAE (Mean Absolute Error): Average absolute difference between predictions and actual values. Lower is better  
 ```{r lm}
